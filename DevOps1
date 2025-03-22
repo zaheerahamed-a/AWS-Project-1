@@ -1,0 +1,158 @@
+Implement DevOps Lifecycle as faster as possible.
+Following are the specifications of the lifecycle:
+1. Install the necessary software on the machines using a configuration
+management tool
+2. Git workflow has to be implemented
+3. CodeBuild should automatically be triggered once a commit is made to
+master branch or develop branch.
+a. If a commit is made to master branch, test and push to prod
+b. If a commit is made to develop branch, just test the product, do not
+push to prod
+4. The code should be containerized with the help of a Dockerfile. The
+Dockerfile should be built every time there is a push to GitHub. Use the
+following pre-built container for your application: hshar/webapp
+The code should reside in '/var/www/html'
+5. The above tasks should be defined in a Jenkins Pipeline with the following
+jobs:
+a. Job1 : build
+b. Job2 : test
+c. Job3 : prod
+
+Solution:
+This implementation will involve multiple stages, including infrastructure setup, automation, and CI/CD pipeline creation.
+
+### **1. Setup Configuration Management**
+Use **Ansible** to install the required software on the target machines. 
+
+- Install Git, Docker, and Jenkins
+- Configure Jenkins with the necessary plugins
+- Set up AWS CLI and CodeBuild (if applicable)
+- Ensure the system is up-to-date
+
+**Playbook Example (install.yml):**
+```yaml
+- name: Install necessary packages
+  hosts: all
+  become: true
+  tasks:
+    - name: Update package lists
+      apt:
+        update_cache: yes
+
+    - name: Install required packages
+      apt:
+        name: 
+          - git
+          - docker.io
+          - openjdk-11-jdk
+          - unzip
+        state: present
+
+    - name: Start and enable Docker
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+```
+
+### **2. Implement Git Workflow**
+Define Git workflow:
+- Feature branches for development
+- Develop branch for integration
+- Master branch for production
+
+Example:
+```bash
+git checkout -b feature-branch
+git add .
+git commit -m "Feature added"
+git push origin feature-branch
+```
+Once reviewed, merge to `develop`, test, and later merge to `master` for production.
+
+### **3. Setup CodeBuild Triggers**
+Use AWS CodeBuild to trigger builds on GitHub commits.
+
+- **Develop branch**: Run tests only.
+- **Master branch**: Run tests and push to production.
+
+Create a **buildspec.yml** for AWS CodeBuild:
+```yaml
+version: 0.2
+phases:
+  install:
+    commands:
+      - echo "Installing dependencies..."
+      - apt update && apt install -y docker.io
+  build:
+    commands:
+      - echo "Building the application..."
+      - docker build -t my-app .
+  post_build:
+    commands:
+      - echo "Build complete"
+```
+Then, configure CodeBuild Webhooks in AWS.
+
+### **4. Containerize with Docker**
+Create a **Dockerfile**:
+```dockerfile
+FROM hshar/webapp
+COPY . /var/www/html
+WORKDIR /var/www/html
+EXPOSE 80
+CMD ["apachectl", "-D", "FOREGROUND"]
+```
+Whenever there is a push to GitHub, the Docker image should be rebuilt.
+
+### **5. Configure Jenkins Pipeline**
+Define a **Jenkinsfile**:
+```groovy
+pipeline {
+    agent any
+    environment {
+        IMAGE_NAME = 'my-app'
+        REGISTRY = 'my-docker-registry'
+    }
+    stages {
+        stage('Build') {
+            steps {
+                script {
+                    sh 'docker build -t $IMAGE_NAME .'
+                }
+            }
+        }
+        stage('Test') {
+            steps {
+                script {
+                    sh 'docker run --rm $IMAGE_NAME pytest'
+                }
+            }
+        }
+        stage('Deploy') {
+            when {
+                branch 'master'
+            }
+            steps {
+                script {
+                    sh 'docker tag $IMAGE_NAME $REGISTRY/$IMAGE_NAME:latest'
+                    sh 'docker push $REGISTRY/$IMAGE_NAME:latest'
+                    sh 'ssh user@server docker pull $REGISTRY/$IMAGE_NAME:latest'
+                    sh 'ssh user@server docker run -d -p 80:80 $REGISTRY/$IMAGE_NAME:latest'
+                }
+            }
+        }
+    }
+}
+```
+### **6. Define Jenkins Jobs**
+- **Job1: Build** – Fetches the code and builds the Docker container.
+- **Job2: Test** – Runs tests on the container.
+- **Job3: Prod** – Deploys only when committing to `master`.
+
+---
+### **Next Steps**
+- Configure Jenkins to execute the pipeline automatically via GitHub Webhooks.
+- Store credentials securely using AWS Secrets Manager or Jenkins Credentials Manager.
+- Set up monitoring (CloudWatch, Prometheus, Grafana).
+- Automate infrastructure provisioning using Terraform.

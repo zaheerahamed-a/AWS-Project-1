@@ -1,0 +1,282 @@
+You are hired as a DevOps Engineer for Analytics Pvt Ltd. This company is a
+product based organization which uses Docker for their containerization needs
+within the company. The final product received a lot of traction in the first few
+weeks of launch. Now with the increasing demand, the organization needs to
+have a platform for automating deployment, scaling and operations of application
+containers across clusters of hosts. As a DevOps Engineer, you need to
+implement a DevOps lifecycle such that all the requirements are implemented
+without any change in the Docker containers in the testing environment.
+Up until now, this organization used to follow a monolithic architecture with just 2
+developers. The product is present on: https://github.com/hshar/website.git
+Following are the specifications of the lifecycle:
+1. Git workflow should be implemented. Since the company follows a
+monolithic architecture of development, you need to take care of version
+control. The release should happen only on the 25th of every month.
+2. CodeBuild should be triggered once the commits are made in the master
+branch.
+3. The code should be containerized with the help of the Dockerfile. The
+Dockerfile should be built every time if there is a push to GitHub. Create a
+custom Docker image using a Dockerfile.
+4. As per the requirement in the production server, you need to use the
+Kubernetes cluster and the containerized code from Docker Hub should be
+deployed with 2 replicas. Create a NodePort service and configure the
+same for port 30008.
+5. Create a Jenkins Pipeline script to accomplish the above task.
+6. For configuration management of the infrastructure, you need to deploy the
+configuration on the servers to install necessary software and
+configurations.
+7. Using Terraform, accomplish the task of infrastructure creation in the AWS
+cloud provider.
+---
+
+## **1. Git Workflow & Version Control**
+Since the company follows a monolithic architecture and requires version control:  
+- Use **Git branching strategy**:  
+  - **Feature branches** for new development  
+  - **Develop branch** for integration  
+  - **Master branch** for releases  
+- **Scheduled Release:**  
+  - Only merge `develop` to `master` on the **25th of every month**  
+  - Use **GitHub Actions** to prevent merges before the 25th  
+  - Use **Git tags** for versioning:  
+    ```bash
+    git tag -a v1.0 -m "Release for March"
+    git push origin v1.0
+    ```
+
+---
+
+## **2. CodeBuild Integration**
+AWS CodeBuild should trigger when changes are pushed to the `master` branch.  
+Create a **buildspec.yml** in the repository:  
+
+```yaml
+version: 0.2
+phases:
+  install:
+    commands:
+      - echo "Installing dependencies..."
+      - apt update && apt install -y docker.io
+  build:
+    commands:
+      - echo "Building Docker Image..."
+      - docker build -t my-app .
+      - echo "Pushing to Docker Hub..."
+      - docker login -u $DOCKER_USER -p $DOCKER_PASS
+      - docker tag my-app my-dockerhub-repo/my-app:latest
+      - docker push my-dockerhub-repo/my-app:latest
+  post_build:
+    commands:
+      - echo "Build process completed."
+```
+
+- Store Docker Hub credentials in AWS **Secrets Manager** or CodeBuild environment variables.  
+- Configure **GitHub Webhooks** to trigger CodeBuild on `master` commits.  
+
+---
+
+## **3. Containerization using Docker**
+A **Dockerfile** should be created for containerizing the application:  
+
+```dockerfile
+FROM nginx:latest
+COPY . /usr/share/nginx/html
+WORKDIR /usr/share/nginx/html
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
+```
+
+When a push is made to GitHub, the Docker image should be rebuilt and pushed to **Docker Hub**.  
+
+---
+
+## **4. Deploy to Kubernetes (EKS)**
+Use **Amazon EKS** for Kubernetes and deploy with **2 replicas**.  
+
+### **4.1 Kubernetes Deployment (deployment.yaml)**
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: my-app
+  template:
+    metadata:
+      labels:
+        app: my-app
+    spec:
+      containers:
+      - name: my-app
+        image: my-dockerhub-repo/my-app:latest
+        ports:
+        - containerPort: 80
+```
+
+### **4.2 Kubernetes Service (service.yaml)**
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: my-app-service
+spec:
+  type: NodePort
+  selector:
+    app: my-app
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80
+      nodePort: 30008  # Exposing on port 30008
+```
+
+Apply these manifests to the Kubernetes cluster:
+```bash
+kubectl apply -f deployment.yaml
+kubectl apply -f service.yaml
+```
+
+---
+
+## **5. Jenkins Pipeline**
+Define a **Jenkinsfile** to automate the process:  
+
+```groovy
+pipeline {
+    agent any
+    environment {
+        IMAGE_NAME = 'my-app'
+        REGISTRY = 'my-dockerhub-repo'
+    }
+    stages {
+        stage('Clone Repository') {
+            steps {
+                git branch: 'master', url: 'https://github.com/hshar/website.git'
+            }
+        }
+        stage('Build Docker Image') {
+            steps {
+                sh 'docker build -t $IMAGE_NAME .'
+            }
+        }
+        stage('Push to Docker Hub') {
+            steps {
+                sh 'docker login -u $DOCKER_USER -p $DOCKER_PASS'
+                sh 'docker tag $IMAGE_NAME $REGISTRY/$IMAGE_NAME:latest'
+                sh 'docker push $REGISTRY/$IMAGE_NAME:latest'
+            }
+        }
+        stage('Deploy to Kubernetes') {
+            steps {
+                sh 'kubectl apply -f deployment.yaml'
+                sh 'kubectl apply -f service.yaml'
+            }
+        }
+    }
+}
+```
+
+- Configure Jenkins to use **GitHub Webhooks** to trigger builds on the `master` branch.  
+- Store Docker credentials as **Jenkins credentials**.  
+
+---
+
+## **6. Configuration Management**
+Use **Ansible** to configure servers.  
+
+**Playbook (install.yml):**  
+```yaml
+- name: Install required software
+  hosts: all
+  become: true
+  tasks:
+    - name: Install dependencies
+      apt:
+        name:
+          - git
+          - docker.io
+          - kubectl
+        state: present
+    - name: Start Docker
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+```
+Run:  
+```bash
+ansible-playbook -i inventory install.yml
+```
+
+---
+
+## **7. Infrastructure as Code (Terraform)**
+Use Terraform to provision AWS infrastructure.  
+
+### **7.1 Terraform Configuration (`main.tf`)**
+```hcl
+provider "aws" {
+  region = "us-east-1"
+}
+
+resource "aws_eks_cluster" "my_cluster" {
+  name     = "my-k8s-cluster"
+  role_arn = aws_iam_role.eks_role.arn
+
+  vpc_config {
+    subnet_ids = [aws_subnet.public1.id, aws_subnet.public2.id]
+  }
+}
+
+resource "aws_iam_role" "eks_role" {
+  name = "eks-cluster-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Service = "eks.amazonaws.com"
+      }
+      Action = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_security_group" "eks_sg" {
+  name        = "eks-security-group"
+  description = "Allow NodePort traffic"
+
+  ingress {
+    from_port   = 30008
+    to_port     = 30008
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+```
+
+### **7.2 Deploy the Infrastructure**
+```bash
+terraform init
+terraform apply -auto-approve
+```
+
+---
+
+## **Next Steps**
+1. **Configure AWS CodeBuild & CodePipeline** to automate deployments.  
+2. **Set up monitoring** using CloudWatch, Prometheus, and Grafana.  
+3. **Use ALB & Auto Scaling** for better traffic handling.  
+
+---
